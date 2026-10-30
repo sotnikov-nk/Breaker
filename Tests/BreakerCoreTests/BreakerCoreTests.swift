@@ -517,6 +517,9 @@ final class HTTPAndPFParseTests: XCTestCase {
         XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.1 200 OK\r\nContent-Length: 15\r\n".utf8)))
         XCTAssertTrue(Parse.httpResponseComplete(Array(raw.utf8)) == raw.hasSuffix("0\r\n\r\n"))
         XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.1 200 OK\r\n\r\n198.51.100.170".utf8)))
+        // Without a length, a whole address line ends the response.
+        XCTAssertTrue(Parse.httpResponseComplete(Array("HTTP/1.0 200 OK\r\n\r\n198.51.100.170\n".utf8)))
+        XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.0 200 OK\r\n\r\n198.51.\n".utf8)))
     }
 
     func testMalformedChunkSizes() {

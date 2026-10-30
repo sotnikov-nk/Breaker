@@ -78,7 +78,10 @@ public enum Parse {
                 return raw.count - bodyStart >= 5 && raw.suffix(5).elementsEqual([48, 13, 10, 13, 10])
             }
         }
-        return false
+        // No framing (HTTP/1.0 through a proxy that keeps the connection open): an
+        // echo service answers with one line, so a whole address line is the answer.
+        let body = raw[bodyStart...]
+        return body.last == 10 && echoedIP(String(decoding: body, as: UTF8.self)) != nil
     }
 
     /// Splits a raw HTTP/1.x response into status code and body, decoding chunked bodies.

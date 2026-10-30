@@ -356,7 +356,9 @@ final class Engine {
                 verifiedTunnel = nil
                 log("tunnel \(tunnel) closed after repeated IP check failures")
             }
-            nextCheckAt = now.addingTimeInterval(verifiedTunnel == nil ? 5 : 10)
+            // A tunnel that just came up often needs a moment more: retry soon at first.
+            let retry: TimeInterval = verifiedTunnel != nil ? 10 : consecutiveFailures <= 2 ? 2 : 5
+            nextCheckAt = now.addingTimeInterval(retry)
         }
         tick()
     }

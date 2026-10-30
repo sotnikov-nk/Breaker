@@ -250,6 +250,10 @@ enum ExternalIP {
     /// A client that routes inside the tunnel (Incy with the RoscomVPN profile) may send
     /// some echo services direct on purpose, so one answer with the home IP does not
     /// mean the tunnel leads elsewhere while another service sees the VPN server.
+    ///
+    /// All services are asked at once. Right after connecting, a proxy client such as
+    /// Shadowrocket accepts connections before its server link is up and leaves them
+    /// hanging; asked one by one, that cost a full timeout per service.
     static func fetch(tunnel: String, accept: @escaping (IPAddress) -> Bool,
                       completion: @escaping (Result<IPAddress, Failure>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
@@ -258,24 +262,43 @@ enum ExternalIP {
                 completion(.failure(.noAnswer("\(tunnel): no such interface")))
                 return
             }
-            var errors: [String] = []
-            var firstAnswer: IPAddress?
-            for endpoint in PFRules.ipCheckEndpoints {
-                switch ask(endpoint, interfaceIndex: index) {
-                case .success(let ip):
-                    if accept(ip) {
-                        completion(.success(ip))
-                        return
+            let endpoints = PFRules.ipCheckEndpoints
+            let lock = NSLock()
+            var results = [Result<IPAddress, Reason>?](repeating: nil, count: endpoints.count)
+            var answered = false
+            let group = DispatchGroup()
+            for (i, endpoint) in endpoints.enumerated() {
+                group.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    let result = ask(endpoint, interfaceIndex: index)
+                    lock.lock()
+                    results[i] = result
+                    var winner: IPAddress?
+                    if !answered, case .success(let ip) = result, accept(ip) {
+                        answered = true
+                        winner = ip
                     }
-                    firstAnswer = firstAnswer ?? ip
-                case .failure(let reason):
-                    errors.append("\(endpoint.host): \(reason)")
+                    lock.unlock()
+                    if let winner { completion(.success(winner)) }
+                    group.leave()
                 }
             }
-            if let firstAnswer {
-                completion(.success(firstAnswer))
-            } else {
-                completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+            group.notify(queue: .global(qos: .utility)) {
+                guard !answered else { return }
+                var errors: [String] = []
+                var firstAnswer: IPAddress?
+                for (endpoint, result) in zip(endpoints, results) {
+                    switch result {
+                    case .success(let ip)?: firstAnswer = firstAnswer ?? ip
+                    case .failure(let reason)?: errors.append("\(endpoint.host): \(reason)")
+                    case nil: break
+                    }
+                }
+                if let firstAnswer {
+                    completion(.success(firstAnswer))
+                } else {
+                    completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+                }
             }
         }
     }
