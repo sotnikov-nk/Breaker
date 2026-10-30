@@ -178,14 +178,6 @@ enum Routing {
         Shell.run("/bin/ps", ["-axo", "user=,command="], timeout: 5).stdout
     }
 
-    /// Drops the system's cached DNS answers. A proxy client in fake-IP mode
-    /// (Shadowrocket) hands out made-up addresses and forgets them when it reconnects;
-    /// cached ones then lead nowhere, and the IP check would knock on them forever.
-    static func flushDNSCache() {
-        Shell.run("/usr/bin/dscacheutil", ["-flushcache"], timeout: 5)
-        Shell.run("/usr/bin/killall", ["-HUP", "mDNSResponder"], timeout: 5)
-    }
-
     static func onLinkV6() -> [String] {
         let r = Shell.run("/usr/sbin/netstat", ["-rn", "-f", "inet6"], timeout: 5)
         return r.ok ? Routes.onLinkIPv6Prefixes(r.stdout) : []
@@ -271,44 +263,120 @@ enum ExternalIP {
                 return
             }
             let endpoints = PFRules.ipCheckEndpoints
-            let lock = NSLock()
-            var results = [Result<IPAddress, Reason>?](repeating: nil, count: endpoints.count)
-            var answered = false
+            let gather = Gather(count: endpoints.count)
+            // Exactly once: on the first accepted answer, when every service has
+            // answered, or at the deadline, whichever comes first.
+            let finish = { (result: Result<IPAddress, Failure>) in
+                gather.lock.lock()
+                let first = !gather.finished
+                gather.finished = true
+                gather.lock.unlock()
+                if first { completion(result) }
+            }
+            let summary = { () -> Result<IPAddress, Failure> in
+                gather.lock.lock()
+                defer { gather.lock.unlock() }
+                var errors: [String] = []
+                var firstAnswer: IPAddress?
+                for (endpoint, result) in zip(endpoints, gather.results) {
+                    switch result {
+                    case .success(let ip)?: firstAnswer = firstAnswer ?? ip
+                    case .failure(let reason)?: errors.append("\(endpoint.host): \(reason)")
+                    case nil: errors.append("\(endpoint.host): нет ответа за \(checkDeadlineSeconds) с")
+                    }
+                }
+                if let firstAnswer { return .success(firstAnswer) }
+                return .failure(.noAnswer(errors.joined(separator: "; ")))
+            }
             let group = DispatchGroup()
             for (i, endpoint) in endpoints.enumerated() {
                 group.enter()
                 DispatchQueue.global(qos: .utility).async {
                     let result = ask(endpoint, interfaceIndex: index)
-                    lock.lock()
-                    results[i] = result
-                    var winner: IPAddress?
-                    if !answered, case .success(let ip) = result, accept(ip) {
-                        answered = true
-                        winner = ip
-                    }
-                    lock.unlock()
-                    if let winner { completion(.success(winner)) }
+                    gather.lock.lock()
+                    gather.results[i] = result
+                    gather.lock.unlock()
+                    if case .success(let ip) = result, accept(ip) { finish(.success(ip)) }
                     group.leave()
                 }
             }
-            group.notify(queue: .global(qos: .utility)) {
-                guard !answered else { return }
-                var errors: [String] = []
-                var firstAnswer: IPAddress?
-                for (endpoint, result) in zip(endpoints, results) {
-                    switch result {
-                    case .success(let ip)?: firstAnswer = firstAnswer ?? ip
-                    case .failure(let reason)?: errors.append("\(endpoint.host): \(reason)")
-                    case nil: break
-                    }
-                }
-                if let firstAnswer {
-                    completion(.success(firstAnswer))
-                } else {
-                    completion(.failure(.noAnswer(errors.joined(separator: "; "))))
-                }
+            group.notify(queue: .global(qos: .utility)) { finish(summary()) }
+            // A service stuck somewhere must not hold the check (and the tunnel) forever.
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(checkDeadlineSeconds)) {
+                finish(summary())
             }
         }
+    }
+
+    private static let checkDeadlineSeconds = 15
+
+    private final class Gather: @unchecked Sendable {
+        let lock = NSLock()
+        var results: [Result<IPAddress, Reason>?]
+        var finished = false
+        init(count: Int) { results = Array(repeating: nil, count: count) }
+    }
+
+    /// getaddrinfo has no timeout of its own and was seen hanging for minutes right
+    /// after a VPN reconnect. It runs on its own thread and is abandoned after the
+    /// timeout; abandoned lookups free their result when they finally return.
+    private final class Lookup: @unchecked Sendable {
+        let lock = NSLock()
+        var done = false
+        var abandoned = false
+        var rc: Int32 = 0
+        var list: UnsafeMutablePointer<addrinfo>?
+    }
+
+    private static let lookupsLock = NSLock()
+    private static var runningLookups = 0
+    /// Hung lookups each keep a thread; past this many, new ones fail at once.
+    private static let maxRunningLookups = 20
+
+    private static func lookup(_ host: String) -> Result<UnsafeMutablePointer<addrinfo>, Reason> {
+        lookupsLock.lock()
+        guard runningLookups < maxRunningLookups else {
+            lookupsLock.unlock()
+            return .failure(Reason("DNS не отвечает"))
+        }
+        runningLookups += 1
+        lookupsLock.unlock()
+
+        let job = Lookup()
+        let ready = DispatchSemaphore(value: 0)
+        Thread {
+            var hints = addrinfo()
+            hints.ai_family = AF_INET
+            hints.ai_socktype = SOCK_STREAM
+            var list: UnsafeMutablePointer<addrinfo>?
+            let rc = getaddrinfo(host, "80", &hints, &list)
+            job.lock.lock()
+            if job.abandoned {
+                if let list { freeaddrinfo(list) }
+            } else {
+                job.rc = rc
+                job.list = list
+                job.done = true
+            }
+            job.lock.unlock()
+            lookupsLock.lock()
+            runningLookups -= 1
+            lookupsLock.unlock()
+            ready.signal()
+        }.start()
+
+        _ = ready.wait(timeout: .now() + .seconds(timeoutSeconds))
+        job.lock.lock()
+        defer { job.lock.unlock() }
+        guard job.done else {
+            job.abandoned = true
+            return .failure(Reason("DNS: нет ответа за \(timeoutSeconds) с"))
+        }
+        guard job.rc == 0, let list = job.list else {
+            if let list = job.list { freeaddrinfo(list) }
+            return .failure(Reason("DNS: \(String(cString: gai_strerror(job.rc)))"))
+        }
+        return .success(list)
     }
 
     private struct Reason: Error, CustomStringConvertible {
@@ -317,13 +385,10 @@ enum ExternalIP {
     }
 
     private static func ask(_ endpoint: IPCheckEndpoint, interfaceIndex: UInt32) -> Result<IPAddress, Reason> {
-        var hints = addrinfo()
-        hints.ai_family = AF_INET
-        hints.ai_socktype = SOCK_STREAM
-        var list: UnsafeMutablePointer<addrinfo>?
-        let rc = getaddrinfo(endpoint.host, "80", &hints, &list)
-        guard rc == 0, let first = list else {
-            return .failure(Reason("DNS: \(String(cString: gai_strerror(rc)))"))
+        let first: UnsafeMutablePointer<addrinfo>
+        switch lookup(endpoint.host) {
+        case .success(let list): first = list
+        case .failure(let reason): return .failure(reason)
         }
         defer { freeaddrinfo(first) }
 
@@ -391,7 +456,10 @@ enum ExternalIP {
                 if Parse.httpResponseComplete(data) { break }
                 continue
             }
-            if n == 0 { break }
+            if n == 0 {
+                if data.isEmpty { return .failure(Reason("соединение закрыто без ответа")) }
+                break
+            }
             // A response without a length on a connection the tunnel keeps open: the
             // parser decides whether what arrived is usable.
             if errno == EAGAIN, !data.isEmpty { break }
