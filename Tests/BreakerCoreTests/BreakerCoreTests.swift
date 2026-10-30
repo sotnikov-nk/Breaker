@@ -413,6 +413,32 @@ final class RoutesTests: XCTestCase {
         XCTAssertTrue(old.enabled)
     }
 
+    func testTunnelOwnerWhileClientsConnectAndDisconnect() {
+        let connecting = "* (Connecting)     A ID VPN (com.liguangming.Shadowrocket) \"Shadowrocket\" [VPN:com.liguangming.Shadowrocket]\n"
+        let connected = connecting.replacingOccurrences(of: "(Connecting)", with: "(Connected)")
+        let disconnecting = connecting.replacingOccurrences(of: "(Connecting)", with: "(Disconnecting)")
+        let idle = connecting.replacingOccurrences(of: "(Connecting)", with: "(Disconnected)")
+        XCTAssertTrue(Parse.vpnServiceInTransition(connecting))
+        XCTAssertFalse(Parse.vpnServiceInTransition(connected))
+        XCTAssertFalse(Parse.vpnServiceInTransition(idle))
+        // A new tunnel while Shadowrocket is still connecting is nobody's yet, so its
+        // routes are not learned into Amnezia's table.
+        XCTAssertNil(VPNClient.owner(scutil: connecting, preferred: nil, tunnelClient: nil, tunnelIsNew: true))
+        XCTAssertEqual(VPNClient.owner(scutil: connected, preferred: nil, tunnelClient: nil, tunnelIsNew: true), .shadowrocket)
+        // Its tunnel stays its own while it disconnects.
+        for scutil in [disconnecting, idle, ""] {
+            XCTAssertEqual(VPNClient.owner(scutil: scutil, preferred: nil, tunnelClient: .shadowrocket, tunnelIsNew: false),
+                           .shadowrocket)
+        }
+        // Amnezia is not a system VPN service: without one connecting, a tunnel is its.
+        XCTAssertEqual(VPNClient.owner(scutil: idle, preferred: nil, tunnelClient: nil, tunnelIsNew: true), .amnezia)
+        // A service stuck connecting does not hide Amnezia's tunnel for long.
+        XCTAssertEqual(VPNClient.owner(scutil: connecting, preferred: nil, tunnelClient: nil, tunnelIsNew: false), .amnezia)
+        // A connected client takes over a tunnel first seen as Amnezia's.
+        XCTAssertEqual(VPNClient.owner(scutil: connected, preferred: nil, tunnelClient: .amnezia, tunnelIsNew: false),
+                       .shadowrocket)
+    }
+
     func testLearnedRoutesAreKeptPerClient() {
         let n = { (s: String) in IPv4Network(s)! }
         let amnezia = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("203.0.113.0/24")])

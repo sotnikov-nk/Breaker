@@ -26,6 +26,16 @@ public enum Parse {
         traceIP(body) ?? IPAddress(body.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// `scutil --nc list` → whether a VPN service is connecting, reconnecting or
+    /// disconnecting. Its tunnel and routes can already (or still) be up while the
+    /// service is not listed as connected.
+    public static func vpnServiceInTransition(_ output: String) -> Bool {
+        output.split(whereSeparator: \.isNewline).contains { line in
+            line.contains("[VPN:")
+                && ["(Connecting)", "(Disconnecting)", "(Reasserting)"].contains { line.contains($0) }
+        }
+    }
+
     /// `scutil --nc list` → bundle IDs of the connected VPN services, from the trailing
     /// `[VPN:<bundle id>]` of each `(Connected)` line. The last bracket is used, since the
     /// quoted service name before it is free text.

@@ -106,9 +106,9 @@ public enum VPNClient: String, Codable, CaseIterable {
 
     /// Incy, Happ and Shadowrocket split traffic inside the client: their Direct rules are sent
     /// by the client itself via Wi-Fi, which pf cannot tell apart from a leak. While
-    /// such a client is connected and verified, traffic outside the tunnel is allowed
-    /// (see `PFRules.ruleset(trustClient:)`); the client's own kill switch keeps other
-    /// apps in the tunnel. Amnezia splits traffic with system routes, which Breaker
+    /// such a client's tunnel is up, traffic outside the tunnel is allowed (except
+    /// direct HTTP until the IP is verified; see `PFRules.ruleset(trustClient:)`); the
+    /// client's own kill switch keeps other apps in the tunnel. Amnezia splits traffic with system routes, which Breaker
     /// already follows.
     public var routesOwnTraffic: Bool { self != .amnezia }
 
@@ -160,6 +160,27 @@ public enum VPNClient: String, Codable, CaseIterable {
     public static func pick(_ connected: [VPNClient], preferred: VPNClient?) -> VPNClient {
         if let preferred, preferred == .amnezia || connected.contains(preferred) { return preferred }
         return connected.first ?? .amnezia
+    }
+
+    /// The client a tunnel belongs to; nil while that cannot be told.
+    ///
+    /// A Network Extension client sets up its tunnel's routes before `scutil` lists
+    /// it as connected, and tears them down after it stops being listed. Read naively,
+    /// such a tunnel looks like Amnezia's for a moment, and its routes would be learned
+    /// into Amnezia's table for good.
+    /// - Parameter tunnelClient: the client already identified for this same tunnel,
+    ///   which keeps it while the tunnel stays up and nothing else is connected.
+    /// - Parameter tunnelIsNew: the tunnel appeared moments ago. Only then does a
+    ///   connecting service leave the owner open, so a service stuck connecting cannot
+    ///   keep Amnezia's tunnel unrecognized.
+    public static func owner(scutil: String, incyDesktop: Bool = false, preferred: VPNClient?,
+                             tunnelClient: VPNClient?, tunnelIsNew: Bool) -> VPNClient? {
+        let connected = connected(scutil: scutil, incyDesktop: incyDesktop)
+        if connected.isEmpty {
+            if let tunnelClient, tunnelClient != .amnezia { return tunnelClient }
+            if tunnelClient == nil, tunnelIsNew, Parse.vpnServiceInTransition(scutil) { return nil }
+        }
+        return pick(connected, preferred: preferred)
     }
 
     /// The client behind the current tunnel, from `scutil --nc list` alone.
