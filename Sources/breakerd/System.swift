@@ -178,6 +178,14 @@ enum Routing {
         Shell.run("/bin/ps", ["-axo", "user=,command="], timeout: 5).stdout
     }
 
+    /// Drops the system's cached DNS answers. A proxy client in fake-IP mode
+    /// (Shadowrocket) hands out made-up addresses and forgets them when it reconnects;
+    /// cached ones then lead nowhere, and the IP check would knock on them forever.
+    static func flushDNSCache() {
+        Shell.run("/usr/bin/dscacheutil", ["-flushcache"], timeout: 5)
+        Shell.run("/usr/bin/killall", ["-HUP", "mDNSResponder"], timeout: 5)
+    }
+
     static func onLinkV6() -> [String] {
         let r = Shell.run("/usr/sbin/netstat", ["-rn", "-f", "inet6"], timeout: 5)
         return r.ok ? Routes.onLinkIPv6Prefixes(r.stdout) : []

@@ -112,6 +112,8 @@ final class Engine {
             nextCheckAt = .distantPast
             consecutiveFailures = 0
             tunnelSince = Date()
+            // Answers cached under the old tunnel may point nowhere now.
+            if current != nil { Routing.flushDNSCache() }
         }
         // Verification belongs to one interface; a new or vanished tunnel starts over.
         if verifiedTunnel != current { verifiedTunnel = nil }
