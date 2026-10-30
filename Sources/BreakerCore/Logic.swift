@@ -59,6 +59,31 @@ public enum Parse {
         }
     }
 
+    /// Whether `raw` already holds a whole HTTP/1.x response (by Content-Length or the
+    /// last chunk), so the reader can stop without waiting for the connection to close.
+    /// Some clients' tunnels (Shadowrocket) keep it open despite `Connection: close`.
+    public static func httpResponseComplete(_ raw: [UInt8]) -> Bool {
+        let separator: [UInt8] = [13, 10, 13, 10]
+        guard raw.count >= separator.count,
+              let split = (0...(raw.count - separator.count)).first(where: { raw[$0..<$0 + 4].elementsEqual(separator) })
+        else { return false }
+        let bodyStart = split + separator.count
+        let head = String(decoding: raw[..<split], as: UTF8.self).lowercased()
+        for line in head.components(separatedBy: "\r\n").dropFirst() {
+            if line.hasPrefix("content-length:"),
+               let length = Int(line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) {
+                return raw.count - bodyStart >= length
+            }
+            if line.hasPrefix("transfer-encoding:"), line.contains("chunked") {
+                return raw.count - bodyStart >= 5 && raw.suffix(5).elementsEqual([48, 13, 10, 13, 10])
+            }
+        }
+        // No framing (HTTP/1.0 through a proxy that keeps the connection open): an
+        // echo service answers with one line, so a whole address line is the answer.
+        let body = raw[bodyStart...]
+        return body.last == 10 && echoedIP(String(decoding: body, as: UTF8.self)) != nil
+    }
+
     /// Splits a raw HTTP/1.x response into status code and body, decoding chunked bodies.
     public static func httpResponse(_ raw: String) -> (status: Int, body: String)? {
         guard let split = raw.range(of: "\r\n\r\n") else { return nil }

@@ -360,6 +360,24 @@ final class RoutesTests: XCTestCase {
         XCTAssertEqual(VPNClient.detect(""), .amnezia)
         XCTAssertEqual(VPNClient.detect(
             "* (Connected)      7A77DC79-0000-0000-0000-000000000003 VPN (su.ffg.happ)  \"Happ\"  [VPN:su.ffg.happ]\n"), .happ)
+        XCTAssertEqual(VPNClient.detect(
+            "* (Connected)      FBF454DC-0000-0000-0000-000000000004 VPN (com.liguangming.Shadowrocket) \"Shadowrocket\"  [VPN:com.liguangming.Shadowrocket]\n"),
+            .shadowrocket)
+        XCTAssertTrue(VPNClient.shadowrocket.routesOwnTraffic)
+        // With several connected, the chosen one wins, but only while it is connected.
+        let both = """
+        * (Connected)      A ID VPN (su.ffg.happ) "Happ" [VPN:su.ffg.happ]
+        * (Connected)      B ID VPN (com.liguangming.Shadowrocket) "Shadowrocket" [VPN:com.liguangming.Shadowrocket]
+        """
+        XCTAssertEqual(VPNClient.detect(both), .happ)
+        XCTAssertEqual(VPNClient.detect(both, preferred: .shadowrocket), .shadowrocket)
+        XCTAssertEqual(VPNClient.detect(both, preferred: .incy), .happ)
+        XCTAssertEqual(VPNClient.detect(both, preferred: .amnezia), .amnezia)
+        XCTAssertEqual(VPNClient.pick(VPNClient.connected(scutil: "", incyDesktop: true), preferred: nil), .incy)
+        var chosen = GuardConfig(preferredClient: .happ)
+        XCTAssertEqual(try! JSONDecoder().decode(GuardConfig.self, from: try! JSONEncoder().encode(chosen)), chosen)
+        chosen = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"preferredClient":"future"}"#.utf8))
+        XCTAssertNil(chosen.preferredClient)
         // Incy and Happ route traffic themselves; Amnezia uses system routes.
         XCTAssertTrue(VPNClient.incy.routesOwnTraffic)
         XCTAssertTrue(VPNClient.happ.routesOwnTraffic)
@@ -492,6 +510,16 @@ final class HTTPAndPFParseTests: XCTestCase {
     func testChunkedResponse() {
         let raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n198.51.\r\n7\r\n100.170\r\n0\r\n\r\n"
         XCTAssertEqual(Parse.httpResponse(raw)?.body, "198.51.100.170")
+        // A whole response is recognized without waiting for the connection to close.
+        let sized = "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n198.51.100.170\n"
+        XCTAssertTrue(Parse.httpResponseComplete(Array(sized.utf8)))
+        XCTAssertFalse(Parse.httpResponseComplete(Array(sized.dropLast(3).utf8)))
+        XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.1 200 OK\r\nContent-Length: 15\r\n".utf8)))
+        XCTAssertTrue(Parse.httpResponseComplete(Array(raw.utf8)) == raw.hasSuffix("0\r\n\r\n"))
+        XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.1 200 OK\r\n\r\n198.51.100.170".utf8)))
+        // Without a length, a whole address line ends the response.
+        XCTAssertTrue(Parse.httpResponseComplete(Array("HTTP/1.0 200 OK\r\n\r\n198.51.100.170\n".utf8)))
+        XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.0 200 OK\r\n\r\n198.51.\n".utf8)))
     }
 
     func testMalformedChunkSizes() {
