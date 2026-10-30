@@ -360,6 +360,10 @@ final class RoutesTests: XCTestCase {
         XCTAssertEqual(VPNClient.detect(""), .amnezia)
         XCTAssertEqual(VPNClient.detect(
             "* (Connected)      7A77DC79-0000-0000-0000-000000000003 VPN (su.ffg.happ)  \"Happ\"  [VPN:su.ffg.happ]\n"), .happ)
+        XCTAssertEqual(VPNClient.detect(
+            "* (Connected)      FBF454DC-0000-0000-0000-000000000004 VPN (com.liguangming.Shadowrocket) \"Shadowrocket\"  [VPN:com.liguangming.Shadowrocket]\n"),
+            .shadowrocket)
+        XCTAssertTrue(VPNClient.shadowrocket.routesOwnTraffic)
         // Incy and Happ route traffic themselves; Amnezia uses system routes.
         XCTAssertTrue(VPNClient.incy.routesOwnTraffic)
         XCTAssertTrue(VPNClient.happ.routesOwnTraffic)

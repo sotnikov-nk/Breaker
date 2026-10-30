@@ -143,8 +143,8 @@ struct MenuView: View {
 
             Divider()
 
-            sectionHeader("Incy и Happ")
-            note("Сайты из прямых правил клиента открываются напрямую, пока VPN подключён. Включите kill switch в клиенте (в Happ: «Включить все сети»).")
+            sectionHeader("Incy, Happ и Shadowrocket")
+            note("Сайты из прямых правил клиента открываются напрямую, пока VPN подключён. Включите kill switch в клиенте (в Happ «Включить все сети», в Shadowrocket «Include All Networks»).")
                 .padding(.bottom, 10)
         }
         .padding(.horizontal, 14)

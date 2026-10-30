@@ -94,8 +94,9 @@ public enum VPNClient: String, Codable, CaseIterable {
     case amnezia
     case incy
     case happ
+    case shadowrocket
 
-    /// Incy and Happ split traffic inside the client: their Direct rules are sent
+    /// Incy, Happ and Shadowrocket split traffic inside the client: their Direct rules are sent
     /// by the client itself via Wi-Fi, which pf cannot tell apart from a leak. While
     /// such a client is connected and verified, traffic outside the tunnel is allowed
     /// (see `PFRules.ruleset(trustClient:)`); the client's own kill switch keeps other
@@ -108,6 +109,7 @@ public enum VPNClient: String, Codable, CaseIterable {
         case .amnezia: return "AmneziaVPN"
         case .incy: return "Incy"
         case .happ: return "Happ"
+        case .shadowrocket: return "Shadowrocket"
         }
     }
 
@@ -118,6 +120,9 @@ public enum VPNClient: String, Codable, CaseIterable {
     /// the system routing table via Wi-Fi, so those count as split tunneling already;
     /// only its domain-based Direct rules need trust.
     public static let happBundleID = "su.ffg.happ"
+
+    /// The same for Shadowrocket (App Store), whose DIRECT rules work like Incy's.
+    public static let shadowrocketBundleID = "com.liguangming.Shadowrocket"
 
     /// Incy Desktop (the DMG from GitHub) is no system VPN, so `scutil` does not list
     /// it. It runs Xray as root from its app bundle; `ps -axo user=,command=` shows it.
@@ -135,6 +140,7 @@ public enum VPNClient: String, Codable, CaseIterable {
         let connected = Parse.connectedVPNClients(scutilOutput)
         if connected.contains(incyBundleID) { return .incy }
         if connected.contains(happBundleID) { return .happ }
+        if connected.contains(shadowrocketBundleID) { return .shadowrocket }
         return .amnezia
     }
 }
