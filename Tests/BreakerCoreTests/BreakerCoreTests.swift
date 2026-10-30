@@ -496,6 +496,13 @@ final class HTTPAndPFParseTests: XCTestCase {
     func testChunkedResponse() {
         let raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n198.51.\r\n7\r\n100.170\r\n0\r\n\r\n"
         XCTAssertEqual(Parse.httpResponse(raw)?.body, "198.51.100.170")
+        // A whole response is recognized without waiting for the connection to close.
+        let sized = "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n198.51.100.170\n"
+        XCTAssertTrue(Parse.httpResponseComplete(Array(sized.utf8)))
+        XCTAssertFalse(Parse.httpResponseComplete(Array(sized.dropLast(3).utf8)))
+        XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.1 200 OK\r\nContent-Length: 15\r\n".utf8)))
+        XCTAssertTrue(Parse.httpResponseComplete(Array(raw.utf8)) == raw.hasSuffix("0\r\n\r\n"))
+        XCTAssertFalse(Parse.httpResponseComplete(Array("HTTP/1.1 200 OK\r\n\r\n198.51.100.170".utf8)))
     }
 
     func testMalformedChunkSizes() {

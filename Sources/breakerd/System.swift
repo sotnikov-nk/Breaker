@@ -355,8 +355,15 @@ enum ExternalIP {
         var buffer = [UInt8](repeating: 0, count: 4096)
         while data.count < 65536 {
             let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
-            if n > 0 { data += buffer[0..<n]; continue }
+            if n > 0 {
+                data += buffer[0..<n]
+                if Parse.httpResponseComplete(data) { break }
+                continue
+            }
             if n == 0 { break }
+            // A response without a length on a connection the tunnel keeps open: the
+            // parser decides whether what arrived is usable.
+            if errno == EAGAIN, !data.isEmpty { break }
             return .failure(Reason(errno == EAGAIN ? "read timed out" : "recv: \(errnoText())"))
         }
         return .success(String(decoding: data, as: UTF8.self))
