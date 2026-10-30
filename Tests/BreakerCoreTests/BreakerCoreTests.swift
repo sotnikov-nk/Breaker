@@ -337,10 +337,20 @@ final class RoutesTests: XCTestCase {
         let lines = open.split(separator: "\n").map(String.init)
         XCTAssertLessThan(lines.firstIndex(of: "pass out quick all keep state (if-bound)")!,
                           lines.firstIndex { $0.hasPrefix("block") }!)
-        for mode in [FilterMode.locked, .verifying(tunnel: "utun4")] {
-            XCTAssertFalse(PFRules.ruleset(mode: mode, config: config, protected: table, trustClient: true)
-                .contains("pass out quick all keep"))
-        }
+        XCTAssertFalse(PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true)
+            .contains("pass out quick all keep"))
+        // While verifying, the client's own direct connections pass (it needs them to
+        // answer the check), but apps reach the tunnel only for HTTP and DNS and
+        // direct HTTP stays shut.
+        let verifying = PFRules.ruleset(mode: .verifying(tunnel: "utun4"), config: config, protected: table,
+                                        trustClient: true).split(separator: "\n").map(String.init)
+        let direct = verifying.firstIndex(of: "pass out quick all keep state (if-bound)")!
+        XCTAssertLessThan(verifying.firstIndex(of: "block return out quick on utun4 all")!, direct)
+        XCTAssertLessThan(verifying.firstIndex(of: "block return out quick proto tcp from any to any port 80")!, direct)
+        XCTAssertLessThan(verifying.firstIndex { $0.hasPrefix("pass out quick on utun4 inet proto tcp from any to any port 80") }!,
+                          verifying.firstIndex(of: "block return out quick on utun4 all")!)
+        XCTAssertFalse(PFRules.ruleset(mode: .verifying(tunnel: "utun4"), config: config, protected: table)
+            .contains("pass out quick all keep"))
         // Trust ending changes the policy, so the daemon flushes direct states.
         XCTAssertNotEqual(PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true),
                           PFRules.ruleset(mode: .locked, config: config, protected: table))
@@ -401,6 +411,32 @@ final class RoutesTests: XCTestCase {
         // Config files of the test builds, with the removed switch, still load.
         let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true,"trustClientRouting":false}"#.utf8))
         XCTAssertTrue(old.enabled)
+    }
+
+    func testTunnelOwnerWhileClientsConnectAndDisconnect() {
+        let connecting = "* (Connecting)     A ID VPN (com.liguangming.Shadowrocket) \"Shadowrocket\" [VPN:com.liguangming.Shadowrocket]\n"
+        let connected = connecting.replacingOccurrences(of: "(Connecting)", with: "(Connected)")
+        let disconnecting = connecting.replacingOccurrences(of: "(Connecting)", with: "(Disconnecting)")
+        let idle = connecting.replacingOccurrences(of: "(Connecting)", with: "(Disconnected)")
+        XCTAssertTrue(Parse.vpnServiceInTransition(connecting))
+        XCTAssertFalse(Parse.vpnServiceInTransition(connected))
+        XCTAssertFalse(Parse.vpnServiceInTransition(idle))
+        // A new tunnel while Shadowrocket is still connecting is nobody's yet, so its
+        // routes are not learned into Amnezia's table.
+        XCTAssertNil(VPNClient.owner(scutil: connecting, preferred: nil, tunnelClient: nil, tunnelIsNew: true))
+        XCTAssertEqual(VPNClient.owner(scutil: connected, preferred: nil, tunnelClient: nil, tunnelIsNew: true), .shadowrocket)
+        // Its tunnel stays its own while it disconnects.
+        for scutil in [disconnecting, idle, ""] {
+            XCTAssertEqual(VPNClient.owner(scutil: scutil, preferred: nil, tunnelClient: .shadowrocket, tunnelIsNew: false),
+                           .shadowrocket)
+        }
+        // Amnezia is not a system VPN service: without one connecting, a tunnel is its.
+        XCTAssertEqual(VPNClient.owner(scutil: idle, preferred: nil, tunnelClient: nil, tunnelIsNew: true), .amnezia)
+        // A service stuck connecting does not hide Amnezia's tunnel for long.
+        XCTAssertEqual(VPNClient.owner(scutil: connecting, preferred: nil, tunnelClient: nil, tunnelIsNew: false), .amnezia)
+        // A connected client takes over a tunnel first seen as Amnezia's.
+        XCTAssertEqual(VPNClient.owner(scutil: connected, preferred: nil, tunnelClient: .amnezia, tunnelIsNew: false),
+                       .shadowrocket)
     }
 
     func testLearnedRoutesAreKeptPerClient() {

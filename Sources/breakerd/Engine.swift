@@ -27,10 +27,13 @@ final class Engine {
     private var lastForcedCheck = Date.distantPast
     private let learnSettleSeconds: TimeInterval = 5
     private var verifiedTunnel: String?
-    /// Incy or Happ is the connected VPN, so its own routing is trusted.
+    /// Incy, Happ or Shadowrocket is the connected VPN, so its own routing is trusted.
     private var trustedClientConnected = false
     /// The connected Incy is Incy Desktop, whose direct traffic comes from root.
     private var clientIsDesktop = false
+    /// The tunnel `routesClient` was identified on, while it stays up.
+    private var clientTunnel: String?
+    private var tunnelSince = Date.distantPast
     private var mismatchedTunnel: String?
     private var externalIP: String?
     private var lastCheck: Date?
@@ -108,11 +111,14 @@ final class Engine {
             // until then. Check the new tunnel at once.
             nextCheckAt = .distantPast
             consecutiveFailures = 0
+            tunnelSince = Date()
         }
         // Verification belongs to one interface; a new or vanished tunnel starts over.
         if verifiedTunnel != current { verifiedTunnel = nil }
         if mismatchedTunnel != current { mismatchedTunnel = nil }
 
+        // Only for the tunnel it was identified on: utun numbers are reused.
+        if current != clientTunnel { clientTunnel = nil }
         var client: VPNClient?
         var desktop = false
         if current != nil {
@@ -125,9 +131,11 @@ final class Engine {
                 || config.preferredClient == .incy {
                 desktop = VPNClient.incyDesktopRunning(Routing.processes())
             }
-            client = VPNClient.pick(VPNClient.connected(scutil: services, incyDesktop: desktop),
-                                    preferred: config.preferredClient)
+            client = VPNClient.owner(scutil: services, incyDesktop: desktop, preferred: config.preferredClient,
+                                     tunnelClient: clientTunnel == nil ? nil : routesClient,
+                                     tunnelIsNew: Date().timeIntervalSince(tunnelSince) < 15)
             desktop = desktop && client == .incy
+            if client != nil { clientTunnel = current }
         }
         if desktop != clientIsDesktop {
             log("Incy Desktop \(desktop ? "running" : "gone")")
@@ -141,7 +149,9 @@ final class Engine {
             saveLearned()
         }
 
-        if let current {
+        // Not while it is unclear whose tunnel this is: its routes would land in the
+        // wrong client's table.
+        if let current, client != nil {
             learn(Routes.protectedTable(routes, tunnel: current), tunnel: current)
         } else {
             candidate = nil
