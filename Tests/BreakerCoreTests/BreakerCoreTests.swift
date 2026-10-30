@@ -337,10 +337,20 @@ final class RoutesTests: XCTestCase {
         let lines = open.split(separator: "\n").map(String.init)
         XCTAssertLessThan(lines.firstIndex(of: "pass out quick all keep state (if-bound)")!,
                           lines.firstIndex { $0.hasPrefix("block") }!)
-        for mode in [FilterMode.locked, .verifying(tunnel: "utun4")] {
-            XCTAssertFalse(PFRules.ruleset(mode: mode, config: config, protected: table, trustClient: true)
-                .contains("pass out quick all keep"))
-        }
+        XCTAssertFalse(PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true)
+            .contains("pass out quick all keep"))
+        // While verifying, the client's own direct connections pass (it needs them to
+        // answer the check), but apps reach the tunnel only for HTTP and DNS and
+        // direct HTTP stays shut.
+        let verifying = PFRules.ruleset(mode: .verifying(tunnel: "utun4"), config: config, protected: table,
+                                        trustClient: true).split(separator: "\n").map(String.init)
+        let direct = verifying.firstIndex(of: "pass out quick all keep state (if-bound)")!
+        XCTAssertLessThan(verifying.firstIndex(of: "block return out quick on utun4 all")!, direct)
+        XCTAssertLessThan(verifying.firstIndex(of: "block return out quick proto tcp from any to any port 80")!, direct)
+        XCTAssertLessThan(verifying.firstIndex { $0.hasPrefix("pass out quick on utun4 inet proto tcp from any to any port 80") }!,
+                          verifying.firstIndex(of: "block return out quick on utun4 all")!)
+        XCTAssertFalse(PFRules.ruleset(mode: .verifying(tunnel: "utun4"), config: config, protected: table)
+            .contains("pass out quick all keep"))
         // Trust ending changes the policy, so the daemon flushes direct states.
         XCTAssertNotEqual(PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true),
                           PFRules.ruleset(mode: .locked, config: config, protected: table))

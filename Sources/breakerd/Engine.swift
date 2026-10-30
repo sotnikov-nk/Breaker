@@ -147,7 +147,8 @@ final class Engine {
             candidate = nil
         }
 
-        let trusted = config.enabled && client?.routesOwnTraffic == true
+        // A tunnel that exits from a wrong IP gets no direct connections either.
+        let trusted = config.enabled && client?.routesOwnTraffic == true && mismatchedTunnel != current
         if trusted != trustedClientConnected {
             log("client routing \(trusted ? "trusted" : "not trusted")")
             trustedClientConnected = trusted

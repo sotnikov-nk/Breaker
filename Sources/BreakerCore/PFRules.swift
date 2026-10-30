@@ -77,6 +77,10 @@ public enum PFRules {
         // tunnel drops (pf states float across interfaces by default).
         let states = " keep state (if-bound)"
         let scopedToRoutes = config.blockScope == .vpnRoutes && !(protected?.isEmpty ?? true)
+        // `user` only matches TCP and UDP sockets, so name them.
+        let trustedPass = trustedUser == nil
+            ? "pass out quick all" + states
+            : "pass out quick proto { tcp, udp } from any to any" + trustScope + states
 
         // Local paths pass statelessly. pf's implicit inbound pass creates no state, so
         // when a nearby device connects to the Mac (AirDrop, iPhone Mirroring, LAN
@@ -89,7 +93,7 @@ public enum PFRules {
         if trustClient {
             // Also in the `.locked` rendering, which the daemon compares to decide on a
             // state flush: switching the setting off must end the direct connections.
-            lines.append("# client routing trusted while verified" + trustScope)
+            lines.append("# client routing trusted" + trustScope)
         }
         if scopedToRoutes, let protected {
             lines.append("table <\(anchorTable)> { \(protected.pfEntries.joined(separator: ", ")) }")
@@ -139,17 +143,25 @@ public enum PFRules {
             if isTunnelInterface(tunnel) {
                 lines.append("pass out quick on \(tunnel) inet proto tcp from any to any port 80" + states)
                 lines.append("pass out quick on \(tunnel) inet proto { tcp, udp } from any to any port 53" + states)
+                if trustClient {
+                    // A proxy client answers the check only after its own direct
+                    // lookups (Shadowrocket resolves names for its rules, e.g. over
+                    // DoH), so its direct connections pass already. Apps still reach
+                    // the tunnel only for the check's HTTP and DNS, and direct HTTP
+                    // stays shut: a client that sends everything direct cannot carry
+                    // that HTTP out before the check sees the wrong IP.
+                    lines.append("block return out quick on \(tunnel) all")
+                    lines.append("block return out quick proto tcp from any to any port 80")
+                    lines.append(trustedPass)
+                }
             }
         case .open(let tunnel):
             if isTunnelInterface(tunnel) {
                 lines.append("pass out quick on \(tunnel) all" + states)
                 if trustClient {
-                    // The client's direct connections. Tunnel loss or a failed check
-                    // drops back to `.locked`/`.verifying`, which flushes these states.
-                    // `user` only matches TCP and UDP sockets, so name them.
-                    lines.append(trustedUser == nil
-                        ? "pass out quick all" + states
-                        : "pass out quick proto { tcp, udp } from any to any" + trustScope + states)
+                    // The client's direct connections. Tunnel loss drops back to
+                    // `.locked`, which flushes these states.
+                    lines.append(trustedPass)
                 }
             }
         }
