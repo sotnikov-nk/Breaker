@@ -30,6 +30,10 @@ public struct GuardConfig: Codable, Equatable {
     /// seconds. Only affects how fast tampering by other software is noticed: the
     /// rules themselves block in the kernel the moment the VPN drops.
     public var pfCheckIntervalSeconds: Int
+    /// The VPN client to assume when several are connected; nil detects it. A chosen
+    /// client counts only while it is actually connected, so picking one never trusts
+    /// a client that is not there. Choosing Amnezia turns trust off for all of them.
+    public var preferredClient: VPNClient?
 
     public init(
         enabled: Bool = false,
@@ -38,7 +42,8 @@ public struct GuardConfig: Codable, Equatable {
         allowLAN: Bool = false,
         allowDNS: Bool = false,
         recheckIntervalSeconds: Int = 60,
-        pfCheckIntervalSeconds: Int = 1
+        pfCheckIntervalSeconds: Int = 1,
+        preferredClient: VPNClient? = nil
     ) {
         self.enabled = enabled
         self.blockScope = blockScope
@@ -47,6 +52,7 @@ public struct GuardConfig: Codable, Equatable {
         self.allowDNS = allowDNS
         self.recheckIntervalSeconds = recheckIntervalSeconds
         self.pfCheckIntervalSeconds = pfCheckIntervalSeconds
+        self.preferredClient = preferredClient
     }
 
     public init(from decoder: Decoder) throws {
@@ -62,6 +68,8 @@ public struct GuardConfig: Codable, Equatable {
             ?? d.recheckIntervalSeconds
         pfCheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pfCheckIntervalSeconds)
             ?? d.pfCheckIntervalSeconds
+        // A client from a newer version falls back to detection.
+        preferredClient = (try? c.decodeIfPresent(VPNClient.self, forKey: .preferredClient)) ?? nil
     }
 
     /// Server IPs that parse as IPv4/IPv6, normalized and de-duplicated.
@@ -135,13 +143,28 @@ public enum VPNClient: String, Codable, CaseIterable {
         }
     }
 
-    /// The client behind the current tunnel, from `scutil --nc list`.
-    public static func detect(_ scutilOutput: String) -> VPNClient {
-        let connected = Parse.connectedVPNClients(scutilOutput)
-        if connected.contains(incyBundleID) { return .incy }
-        if connected.contains(happBundleID) { return .happ }
-        if connected.contains(shadowrocketBundleID) { return .shadowrocket }
-        return .amnezia
+    /// The clients connected right now, from `scutil --nc list` and, for Incy
+    /// Desktop, the process list; in detection order. Amnezia is not listed: it is
+    /// what remains when none of these is connected.
+    public static func connected(scutil: String, incyDesktop: Bool = false) -> [VPNClient] {
+        let ids = Parse.connectedVPNClients(scutil)
+        var result: [VPNClient] = []
+        if ids.contains(incyBundleID) || incyDesktop { result.append(.incy) }
+        if ids.contains(happBundleID) { result.append(.happ) }
+        if ids.contains(shadowrocketBundleID) { result.append(.shadowrocket) }
+        return result
+    }
+
+    /// The client behind the current tunnel: the preferred one when it is connected
+    /// (Amnezia always counts), otherwise the first connected one.
+    public static func pick(_ connected: [VPNClient], preferred: VPNClient?) -> VPNClient {
+        if let preferred, preferred == .amnezia || connected.contains(preferred) { return preferred }
+        return connected.first ?? .amnezia
+    }
+
+    /// The client behind the current tunnel, from `scutil --nc list` alone.
+    public static func detect(_ scutilOutput: String, preferred: VPNClient? = nil) -> VPNClient {
+        pick(connected(scutil: scutilOutput), preferred: preferred)
     }
 }
 

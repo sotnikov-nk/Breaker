@@ -364,6 +364,20 @@ final class RoutesTests: XCTestCase {
             "* (Connected)      FBF454DC-0000-0000-0000-000000000004 VPN (com.liguangming.Shadowrocket) \"Shadowrocket\"  [VPN:com.liguangming.Shadowrocket]\n"),
             .shadowrocket)
         XCTAssertTrue(VPNClient.shadowrocket.routesOwnTraffic)
+        // With several connected, the chosen one wins, but only while it is connected.
+        let both = """
+        * (Connected)      A ID VPN (su.ffg.happ) "Happ" [VPN:su.ffg.happ]
+        * (Connected)      B ID VPN (com.liguangming.Shadowrocket) "Shadowrocket" [VPN:com.liguangming.Shadowrocket]
+        """
+        XCTAssertEqual(VPNClient.detect(both), .happ)
+        XCTAssertEqual(VPNClient.detect(both, preferred: .shadowrocket), .shadowrocket)
+        XCTAssertEqual(VPNClient.detect(both, preferred: .incy), .happ)
+        XCTAssertEqual(VPNClient.detect(both, preferred: .amnezia), .amnezia)
+        XCTAssertEqual(VPNClient.pick(VPNClient.connected(scutil: "", incyDesktop: true), preferred: nil), .incy)
+        var chosen = GuardConfig(preferredClient: .happ)
+        XCTAssertEqual(try! JSONDecoder().decode(GuardConfig.self, from: try! JSONEncoder().encode(chosen)), chosen)
+        chosen = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"preferredClient":"future"}"#.utf8))
+        XCTAssertNil(chosen.preferredClient)
         // Incy and Happ route traffic themselves; Amnezia uses system routes.
         XCTAssertTrue(VPNClient.incy.routesOwnTraffic)
         XCTAssertTrue(VPNClient.happ.routesOwnTraffic)

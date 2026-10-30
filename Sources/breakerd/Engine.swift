@@ -113,9 +113,22 @@ final class Engine {
         if verifiedTunnel != current { verifiedTunnel = nil }
         if mismatchedTunnel != current { mismatchedTunnel = nil }
 
-        var client = current.map { _ in VPNClient.detect(Routing.vpnServices()) }
-        let desktop = client == .amnezia && VPNClient.incyDesktopRunning(Routing.processes())
-        if desktop { client = .incy }
+        var client: VPNClient?
+        var desktop = false
+        if current != nil {
+            let services = Routing.vpnServices()
+            let ids = Parse.connectedVPNClients(services)
+            // Incy Desktop is looked for only when the App Store Incy is not connected
+            // and Incy could be the answer, to skip `ps` on every tick otherwise.
+            if !ids.contains(VPNClient.incyBundleID), config.preferredClient != .amnezia,
+               VPNClient.pick(VPNClient.connected(scutil: services), preferred: config.preferredClient) == .amnezia
+                || config.preferredClient == .incy {
+                desktop = VPNClient.incyDesktopRunning(Routing.processes())
+            }
+            client = VPNClient.pick(VPNClient.connected(scutil: services, incyDesktop: desktop),
+                                    preferred: config.preferredClient)
+            desktop = desktop && client == .incy
+        }
         if desktop != clientIsDesktop {
             log("Incy Desktop \(desktop ? "running" : "gone")")
             clientIsDesktop = desktop
@@ -397,7 +410,7 @@ final class Engine {
                     nextCheckAt = .distantPast
                 }
                 config = newConfig
-                log("config updated: enabled=\(config.enabled) servers=\(config.vpnServerIPs) lan=\(config.allowLAN) dns=\(config.allowDNS)")
+                log("config updated: enabled=\(config.enabled) servers=\(config.vpnServerIPs) lan=\(config.allowLAN) dns=\(config.allowDNS) client=\(config.preferredClient?.rawValue ?? "auto")")
                 queue.async { self.tick() }
                 return IPCResponse(ok: true, status: publishStatus())
             }

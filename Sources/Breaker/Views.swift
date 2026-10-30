@@ -489,6 +489,26 @@ struct SettingsView: View {
             }
 
             if let config = model.status?.config {
+                Section {
+                    Picker("Клиент", selection: Binding(
+                        get: { config.preferredClient },
+                        set: { value in model.updateConfig { $0.preferredClient = value } }
+                    )) {
+                        Text("Автоматически").tag(VPNClient?.none)
+                        ForEach(VPNClient.allCases, id: \.self) { client in
+                            Text(client.title).tag(VPNClient?.some(client))
+                        }
+                    }
+                    if let status = model.status, status.routeInterface != nil, let client = status.routesClient {
+                        LabeledContent("Сейчас", value: client.title)
+                    }
+                } header: {
+                    Text("Клиент VPN")
+                } footer: {
+                    Text("Нужно, только если подключено несколько VPN сразу. Выбранный клиент учитывается, пока он подключён, иначе Breaker определяет клиент сам.")
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Проверка внешнего IP") {
                     Stepper(
                         "Перепроверять каждые \(config.recheckIntervalSeconds) с",
