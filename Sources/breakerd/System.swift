@@ -246,7 +246,7 @@ enum ExternalIP {
     /// through a socket bound to `tunnel`, so it cannot leave through any other
     /// interface: if the tunnel is gone, the check simply fails.
     ///
-    /// The first answer that `accept`s wins; without one, the first answer is returned.
+    /// The first answer that `accept`s wins; without one, see `Decision.wrongExitIP`.
     /// A client that routes inside the tunnel (Incy with the RoscomVPN profile) may send
     /// some echo services direct on purpose, so one answer with the home IP does not
     /// mean the tunnel leads elsewhere while another service sees the VPN server.
@@ -285,19 +285,24 @@ enum ExternalIP {
             }
             group.notify(queue: .global(qos: .utility)) {
                 guard !answered else { return }
-                var errors: [String] = []
-                var firstAnswer: IPAddress?
+                var details: [String] = []
+                var answers: [IPAddress?] = []
                 for (endpoint, result) in zip(endpoints, results) {
                     switch result {
-                    case .success(let ip)?: firstAnswer = firstAnswer ?? ip
-                    case .failure(let reason)?: errors.append("\(endpoint.host): \(reason)")
-                    case nil: break
+                    case .success(let ip)?:
+                        answers.append(ip)
+                        details.append("\(endpoint.host): \(ip)")
+                    case .failure(let reason)?:
+                        answers.append(nil)
+                        details.append("\(endpoint.host): \(reason)")
+                    case nil:
+                        answers.append(nil)
                     }
                 }
-                if let firstAnswer {
-                    completion(.success(firstAnswer))
+                if let ip = Decision.wrongExitIP(answers) {
+                    completion(.success(ip))
                 } else {
-                    completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+                    completion(.failure(.noAnswer(details.joined(separator: "; "))))
                 }
             }
         }

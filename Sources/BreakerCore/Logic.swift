@@ -196,6 +196,20 @@ public enum Decision {
         return Result(mode: .verifying(tunnel: iface), state: .verifying)
     }
 
+    /// The exit IP to report as wrong once no echo service saw a VPN server; nil when
+    /// the check is inconclusive and counts as a failure instead.
+    ///
+    /// Proxy clients route some echo services direct on purpose (Shadowrocket and Incy
+    /// configs send ipify, checkip.amazonaws.com and ifconfig.me outside the VPN), and
+    /// those always see the home IP. When the services that go through the VPN fail
+    /// for a moment, only those direct answers are left; that says nothing about the
+    /// tunnel. So the tunnel is called wrong only when every service answered.
+    /// - Parameter answers: one per service, nil where it gave no answer.
+    public static func wrongExitIP(_ answers: [IPAddress?]) -> IPAddress? {
+        guard !answers.isEmpty, answers.allSatisfy({ $0 != nil }) else { return nil }
+        return answers.first ?? nil
+    }
+
     /// Whether the external IP proves traffic exits through one of the VPN servers.
     public static func ipMatches(_ ip: IPAddress, config: GuardConfig) -> Bool {
         config.validServerIPs.contains(ip)
