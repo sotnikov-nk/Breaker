@@ -439,6 +439,16 @@ final class RoutesTests: XCTestCase {
                        .shadowrocket)
     }
 
+    func testDirectEchoServicesAloneDoNotMakeAMismatch() {
+        let home = IPAddress("198.51.100.20")!, other = IPAddress("198.51.100.30")!
+        // The services through the VPN failed; only the direct ones (home IP) answered.
+        XCTAssertNil(Decision.wrongExitIP([nil, nil, home, home, home]))
+        XCTAssertNil(Decision.wrongExitIP([nil, nil, nil, nil, nil]))
+        XCTAssertNil(Decision.wrongExitIP([]))
+        // Every service answered and none saw a server: the tunnel exits elsewhere.
+        XCTAssertEqual(Decision.wrongExitIP([other, other, home, home, home]), other)
+    }
+
     func testLearnedRoutesAreKeptPerClient() {
         let n = { (s: String) in IPv4Network(s)! }
         let amnezia = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("203.0.113.0/24")])
